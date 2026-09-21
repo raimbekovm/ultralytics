@@ -1,6 +1,7 @@
 name: probe
 on:
-  workflow_dispatch:
+  push:
+    branches: ['probe/**']
 jobs:
   probe:
     runs-on: ubuntu-latest
