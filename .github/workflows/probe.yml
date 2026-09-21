@@ -15,9 +15,6 @@ jobs:
           - python: "3.11"
             torch: "2.0.0"
             torchvision: "0.15.0"
-          - python: "3.11"
-            torch: "2.1.0"
-            torchvision: "0.16.0"
     steps:
       - uses: actions/checkout@v7
       - uses: ultralytics/actions/setup-uv@main
@@ -26,6 +23,7 @@ jobs:
           activate-environment: true
       - run: uv pip install -e ".[export-base,export-legacy-torch]" torch==${{ matrix.torch }} torchvision==${{ matrix.torchvision }} --torch-backend cpu
       - run: |
-          for mode in predictor raw optexec_off noprofile freeze; do
-            python probe_ts.py $mode 2>&1 | grep -E "^(==|call|run|Traceback|RuntimeError|  File)" || true
+          for mode in predictor raw freeze; do
+            PYTHONUNBUFFERED=1 python probe_ts.py $mode > out_$mode.txt 2>&1 || echo "exit=$?"
+            grep -vE "Warning|warn" out_$mode.txt | tail -25
           done
