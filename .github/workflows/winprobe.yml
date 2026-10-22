@@ -1,0 +1,54 @@
+name: winprobe
+on:
+  push:
+    branches: [probe/win-mkdir-acl]
+jobs:
+  probe:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: install
+        run: pip install -q -e . --extra-index-url https://download.pytorch.org/whl/cpu
+      - name: probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $src = "$PWD"; $py = (Get-Command python).Source
+          New-Item -ItemType Directory -Force C:\probe_tmp | Out-Null
+          Set-Content C:\probe_home_file "x"
+          icacls C:\probe_tmp /grant "*S-1-5-32-545:(OI)(CI)M" | Out-Null
+          Invoke-WebRequest https://live.sysinternals.com/PsExec64.exe -OutFile C:\probe_tmp\psexec.exe
+          "UAC EnableLUA: " + (Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System).EnableLUA
+          function Basic($cmdline, $out) {
+            # same user, restricted token: runas /trustlevel first, psexec -l if runas gave nothing
+            Set-Content "$out.cmd" "@set PROBE_SRC=$src`r`n@cd /d $src`r`n$cmdline"
+            runas /trustlevel:0x20000 "$out.cmd" 2>&1 | Out-Null
+            for ($i = 0; $i -lt 30 -and -not (Test-Path $out); $i++) { Start-Sleep 2 }
+            if (-not (Test-Path $out)) {
+              "runas gave no output, trying psexec -l"
+              C:\probe_tmp\psexec.exe -accepteula -nobanner -l cmd /c "$out.cmd" 2>&1 | Out-Null
+            }
+            if (Test-Path $out) { Get-Content $out } else { "no output for $out" }
+          }
+          "== 1) elevated run creates the fallback via the real get_user_config_dir"
+          & $py .github\probe\probe.py elevated C:\probe_tmp\elevated.json
+          Get-Content C:\probe_tmp\elevated.json
+          "owner: " + (Get-Acl C:\probe_tmp\Ultralytics).Owner
+          "== 2) same user, restricted token, reuses it and writes a setting"
+          Basic "`"$py`" .github\probe\probe.py basic C:\probe_tmp\basic.json" C:\probe_tmp\basic.json
+          "== 3) controls: elevated os.mkdir 0o700 vs default mode, then restricted-token write"
+          foreach ($m in "700", "default") {
+            $d = "C:\probe_tmp\ctl_$m"
+            & $py .github\probe\control.py elevated $d $m "C:\probe_tmp\ctl_${m}_elev.json"
+            Get-Content "C:\probe_tmp\ctl_${m}_elev.json"
+            "owner: " + (Get-Acl $d).Owner
+            Basic "`"$py`" .github\probe\control.py basic $d $m C:\probe_tmp\ctl_${m}_basic.json" "C:\probe_tmp\ctl_${m}_basic.json"
+            icacls $d
+          }
